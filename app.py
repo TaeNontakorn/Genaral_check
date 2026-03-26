@@ -4,8 +4,8 @@ import base64
 
 st.set_page_config(page_title="Check", layout="wide")
 
-API_URL     = "http://localhost:8000/check"
-COMPARE_URL = "http://localhost:8000/compare"
+API_URL     = "https://genaral-check.onrender.com/check"
+COMPARE_URL = "https://genaral-check.onrender.com/compare"
 
 st.markdown("<style>iframe { border: none; }</style>", unsafe_allow_html=True)
 
