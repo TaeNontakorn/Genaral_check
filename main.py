@@ -28,7 +28,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[""],
+    allow_origins=["https://genaralcheckgit-s6v9h3jnqkjbk3hasdshd9.streamlit.app/"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

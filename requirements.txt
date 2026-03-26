@@ -2,7 +2,7 @@ fastapi
 uvicorn
 python-dotenv
 google-genai
-python-magic
+python-magic-bin
 python-docx
 pandas
 tabulate
