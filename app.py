@@ -99,7 +99,10 @@ if "check_result" in st.session_state:
             st.success("✅ ตรวจสอบเสร็จสิ้น")
             st.markdown("## 📝 ผลการตรวจคำผิด")
             if r.get("typo_result"):
-                st.markdown(r["typo_result"], unsafe_allow_html=True)
+                st.markdown(
+                    f'<div style="white-space: pre-wrap; line-height: 1.8;">{r["typo_result"]}</div>',
+                    unsafe_allow_html=True,
+                )
             else:
                 st.success("ไม่พบคำผิด")
             with st.expander("📄 ข้อความที่ OCR ได้ (ต้นฉบับ)"):
@@ -170,7 +173,7 @@ if "compare_result" in st.session_state:
             st.error(f"❌ {r['error']}")
         else:
             st.success("✅ เปรียบเทียบเสร็จสิ้น")
-            st.markdown("## 🔍 ผลการเปรียบเทียบเอกสาร")
+            st.markdown(f"## 🔍 ผลการเปรียบเทียบ: `{name_a}` vs `{name_b}`")
             if r.get("compare_result"):
                 st.markdown(r["compare_result"])
             else:

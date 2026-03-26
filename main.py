@@ -67,14 +67,12 @@ def smart_docx_extract(file_path: str) -> str:
     import re, os
     from docx import Document
     from docx.oxml.ns import qn
-    from docx.text.paragraph import Paragraph
     from docx.table import Table as DocxTable
 
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"File not found: {file_path}")
 
     doc = Document(file_path)
-    blocks = []
 
     W_P       = qn("w:p")
     W_TBL     = qn("w:tbl")
@@ -85,18 +83,25 @@ def smart_docx_extract(file_path: str) -> str:
     W_CHAR    = qn("w:char")
     W_TXBX    = qn("w:txbxContent")
     W_DRAWING = qn("w:drawing")
-    ALTCONT   = "{http://schemas.openxmlformats.org/markup-compatibility/2006}AlternateContent"
+    W_ANCHOR  = qn("wp:anchor")
+
+    seen_txbx = set()
 
     def read_paragraph(p_el):
+        """อ่าน text ใน paragraph — ข้าม w:drawing เพื่อไม่ให้ซ้ำกับ textbox pass"""
         parts = []
         for child in p_el.iter():
-            if child.tag == W_T and child.text:
+            tag = child.tag
+            # ข้าม subtree ของ drawing (textbox ลอยอยู่ใน drawing)
+            if tag == W_DRAWING:
+                continue
+            if tag == W_T and child.text:
                 parts.append(child.text)
-            elif child.tag == W_BR:
+            elif tag == W_BR:
                 parts.append("\n")
-            elif child.tag == W_TAB:
+            elif tag == W_TAB:
                 parts.append("\t")
-            elif child.tag == W_SYM:
+            elif tag == W_SYM:
                 char_val = child.get(W_CHAR)
                 if char_val:
                     try:
@@ -105,13 +110,14 @@ def smart_docx_extract(file_path: str) -> str:
                         pass
         return "".join(parts)
 
-    def read_textbox(el):
+    def collect_textbox_text(root_el):
+        """อ่าน text ทุก txbxContent ใน element นี้"""
         lines = []
-        for txbx in el.iter(W_TXBX):
-            for p in txbx.iter(W_P):
-                line = read_paragraph(p)
+        for txbx in root_el.iter(W_TXBX):
+            for p_el in txbx.iter(W_P):
+                line = read_paragraph(p_el)
                 if line.strip():
-                    lines.append(line)
+                    lines.append(line.strip())
         return "\n".join(lines)
 
     def read_table(table):
@@ -125,27 +131,41 @@ def smart_docx_extract(file_path: str) -> str:
             rows_text.append(" | ".join(deduped))
         return rows_text
 
+    blocks = []
+
     for child in doc.element.body:
         if child.tag == W_P:
-            para = Paragraph(child, doc)
-            blocks.append(read_paragraph(child))
-            for sub in child:
-                if sub.tag in (W_DRAWING, ALTCONT):
-                    tb = read_textbox(sub)
-                    if tb.strip():
-                        blocks.append(f"[TEXTBOX: {tb.strip()}]")
+            # อ่าน paragraph text (ไม่รวม drawing)
+            para_text = read_paragraph(child)
+
+            # อ่าน textbox ที่ลอยอยู่ใน paragraph นี้ (wp:anchor)
+            txbx_parts = []
+            for drawing in child.iter(W_DRAWING):
+                for anchor in drawing.iter(W_ANCHOR):
+                    tb = collect_textbox_text(anchor)
+                    if tb.strip() and tb.strip() not in seen_txbx:
+                        seen_txbx.add(tb.strip())
+                        txbx_parts.append(tb.strip())
+
+            combined = para_text.strip()
+            if txbx_parts:
+                combined = (combined + "\n" + "\n".join(txbx_parts)).strip()
+
+            if combined:
+                blocks.append(combined)
 
         elif child.tag == W_TBL:
             blocks.extend(read_table(DocxTable(child, doc)))
 
-    inline_texts = {b.replace("[TEXTBOX: ", "").rstrip("]") for b in blocks if b.startswith("[TEXTBOX:")}
+    # เก็บ textbox ที่อาจหลุดจาก body loop (เช่น nested ลึก)
     for txbx in doc.element.body.iter(W_TXBX):
         lines = [read_paragraph(p) for p in txbx.iter(W_P)]
-        text = "\n".join(lines).strip()
-        if text and text not in inline_texts:
-            blocks.append(f"[TEXTBOX: {text}]")
+        text = "\n".join(l.strip() for l in lines if l.strip())
+        if text and text not in seen_txbx:
+            seen_txbx.add(text)
+            blocks.append(text)
 
-    raw = "\n".join(blocks)
+    raw = "\n\n".join(blocks)
     raw = re.sub(r"\n{3,}", "\n\n", raw.replace("\r\n", "\n").replace("\r", "\n"))
     return raw.strip()
 
@@ -212,20 +232,30 @@ def pdf_check_typo(text: str, gemini_client: genai.Client, page: Optional[int] =
     page_hint = f"หน้า {page}: " if page is not None else ""
 
     prompt = f"""
-        ตรวจสอบคำที่อาจสะกดผิดในข้อความนี้: {text}
+        บทบาท: คุณคือบรรณาธิการตรวจทานเอกสารภาษาไทยมืออาชีพ
+        ภารกิจ: ตรวจสอบคำสะกดผิดและตรวจสอบความถูกต้องของลำดับเลขข้อ (Ordering) ในข้อความต่อไปนี้: {text}
+
         กฎการตรวจสอบ:
-        - เน้นคำที่ไม่ตรงตามพจนานุกรมไทยมาตรฐาน หรือคำที่พิมพ์ผิดจากแป้นพิมพ์ (เช่น "กิน" เป็น "กน", "มา" เป็น "มะ")
-        - ครอบคำที่ผิดด้วย <strong style="color: red;">คำที่ผิด</strong> และแสดงคำที่ถูกต้องในวงเล็บ เช่น <strong style="color: red;">กน</strong> (กิน)
-        - รวมประโยคเต็มที่มีคำผิดนั้นมาด้วย เพื่อให้เห็นบริบท
-        - ถ้าไม่มีคำผิด ให้ return ข้อความเดิมโดยไม่เปลี่ยนแปลง
-        - ถ้ามีหมายเลขหน้าให้ใช้คำว่า "{page_hint}" นำหน้าผลลัพธ์ (เช่น "หน้า 2: ...")
+        1. การสะกดคำ: 
+           - เน้นคำที่ผิดพจนานุกรม หรือ Typo จากการพิมพ์ (เช่น "กน" แทน "กิน")
+           - รูปแบบ: <strong style="color: red;">คำผิด</strong> (คำที่ถูกต้อง)
+        
+        2. ลำดับเลขข้อ (Sequence):
+           - ตรวจสอบว่าเลขข้อ (เช่น 1., 2., 3. หรือ ก., ข., ค.) เรียงลำดับถูกต้องหรือไม่
+           - หากเลขข้อกระโดด ซ้ำ หรือผิดลำดับ ให้เน้นที่เลขข้อนั้นด้วยสีส้ม
+           - รูปแบบ: <strong style="color: orange;">เลขที่ผิด</strong> (เลขที่ควรจะเป็น)
 
-        ตัวอย่าง:
-        Input: "ฉันกินข้าวกับเพื่อน"
-        Output: "{page_hint}ฉัน<strong style=\"color: red;\">กน</strong> (กิน)ข้าวกับเพื่อน"
+        3. การแสดงผล:
+           - แสดงประโยคเต็มที่มีจุดผิดเพื่อให้เห็นบริบท
+           - ถ้ามีหมายเลขหน้า ให้ขึ้นต้นด้วย "{page_hint}"
+           - หากทุกอย่างถูกต้อง (ไม่มีคำผิดและเลขข้อเรียงปกติ) ให้ Return ข้อความเดิมทั้งหมด
+        
+        ตัวอย่างการตรวจเลขข้อ:
+        Input: "1. เดินหน้า 2. ถอยหลัง 4. เลี้ยวซ้าย"
+        Output: "{page_hint}1. เดินหน้า 2. ถอยหลัง <strong style=\"color: orange;\">4.</strong> (3.) เลี้ยวซ้าย"
 
-        Input: "สวัสดีครับ"
-        Output: "สวัสดีครับ"
+        Input: "{text}"
+        Output:
         """
     response = gemini_client.models.generate_content(
         model="gemini-2.5-pro",
@@ -261,7 +291,7 @@ def excel_check(table: str, gemini_client: genai.Client) -> str:
         2. หากพบข้อมูลที่ดูเหมือนจะเป็นรายการเดียวกัน (เช่น ID เดียวกัน หรือชื่อคล้ายกันมาก) แต่ค่าในคอลัมน์อื่นไม่ตรงกัน ให้ระบุออกมา
         3. รายงานผลโดยระบุ: 
            - ชื่อคอลัมน์ที่พบปัญหา
-           - เลข Index ของแถว (Row Index)
+           - เลข Row ของแถว (Row Index)
            - สาเหตุที่คิดว่าผิดปกติ
         4. หากข้อมูลถูกต้องทั้งหมด ให้สรุปสั้นๆ ว่าไม่พบจุดผิดปกติ
         """
@@ -289,12 +319,12 @@ def compare_documents(text_a: str, text_b: str, name_a: str, name_b: str, gemini
         {text_b}
 
         ภารกิจของคุณ:
-        1. ระบุข้อความ / ข้อมูล / ตัวเลข ที่มีอยู่ใน A แต่ไม่มีใน B
-        2. ระบุข้อความ / ข้อมูล / ตัวเลข ที่มีอยู่ใน B แต่ไม่มีใน A
+        1. ระบุข้อความ / ข้อมูล / ตัวเลข ที่มีอยู่ใน {name_a} แต่ไม่มีใน {name_b}
+        2. ระบุข้อความ / ข้อมูล / ตัวเลข ที่มีอยู่ใน {name_b} แต่ไม่มีใน {name_a}
         3. ระบุข้อความที่มีทั้งสองฉบับ แต่มีความแตกต่างกัน (เช่น ตัวเลขต่างกัน, ชื่อต่างกัน)
         4. สรุปภาพรวมว่าเอกสารทั้งสองมีความแตกต่างกันมากน้อยแค่ไหน
 
-        รายงานผลเป็นภาษาไทย จัดหมวดหมู่ให้ชัดเจน
+        รายงานผลเป็นภาษาไทย จัดหมวดหมู่ให้ชัดเจน ถ้าไม่เจอหมวดหมู่ที่มีปัญหาไม่ต้องรายงาน
         หากเอกสารทั้งสองเหมือนกันทุกประการ ให้ระบุว่า "ไม่พบความแตกต่าง"
         """
     response = gemini_client.models.generate_content(
