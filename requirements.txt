@@ -8,5 +8,6 @@ pandas
 tabulate
 openpyxl
 requests
+python-multipart
 streamlit
 lxml
