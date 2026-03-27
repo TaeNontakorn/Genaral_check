@@ -45,18 +45,62 @@ def get_api_key(form_key: str = "") -> str:
 # ================================================================================================================================================
 
 OCR_PROMPT = """
-Extract the main body text and all tables from {page_range} of the provided PDF file. 
-Exclude cover pages, title pages, table of contents, appendices, indexes, headers, footers, bookmarks, annotations, images, and footnotes.
+คุณคือผู้เชี่ยวชาญด้านการสกัดข้อมูล (Data Extraction Expert)
 
-Format the extracted content as Markdown, following these guidelines:
-1. Use appropriate heading levels (#, ##, ###, etc.) to represent the document's structure.
-2. Maintain paragraph separations from the original text.
-3. Use Markdown list formatting (ordered or unordered) for any lists encountered.
-4. Preserve important emphasis such as bold or italics.
-5. Use Markdown quote formatting for any quotations.
-6. For TABLES: Reconstruct them using Markdown table syntax (|---|---|). Ensure that the data alignment and structure remain as close to the original as possible. Do not skip any rows or columns.
+หน้าที่ของคุณคือสกัดเนื้อหาหลักและตารางจากไฟล์ PDF ในช่วงหน้า {page_range} 
+โดยต้องมีความถูกต้องตรงตามต้นฉบับ 100% และห้ามมีการแต่งเติมข้อมูลใด ๆ
 
-If you've finished extracting all the requested text, end your response with the phrase 'Gemini Work Done' on a new line. If you haven't finished, simply stop at a natural breakpoint, and I will prompt you to continue.
+### กฎการสกัดข้อมูล (Strict Rules):
+
+1. เนื้อหาที่ต้องสกัด:
+- สกัดเฉพาะเนื้อหาหลัก (Main Body Text) และตารางทั้งหมด
+- ต้องรักษาลำดับเนื้อหาให้ตรงกับต้นฉบับ 100%
+
+2. สิ่งที่ต้องตัดออก (Exclude):
+- หน้าปก, สารบัญ, ดัชนี, ภาคผนวก
+- Header, Footer, เลขหน้า
+- Footnote และคำอธิบายรูปภาพ
+
+3. ความถูกต้อง (Critical Accuracy):
+- ต้องคงข้อความตามต้นฉบับแบบตัวอักษรต่ออักษร (character-by-character)
+- ห้ามเพิ่ม ลบ หรือแก้ไขเนื้อหา
+- หากข้อความอ่านไม่ออก ให้ใช้ [unclear]
+- ห้ามคาดเดาหรือเติมคำเองโดยเด็ดขาด
+- หากข้อมูลไม่ปรากฏในต้นฉบับ ห้ามสร้างขึ้นใหม่
+
+4. โครงสร้างเอกสาร:
+- ใช้ Markdown Heading (#, ##, ###)
+- รักษาย่อหน้าเดิม
+- รักษาการขึ้นบรรทัดใหม่ (line break)
+- ใช้ list ตามต้นฉบับ
+- คง **bold** และ *italic*
+
+5. การจัดการ Layout:
+- หากเป็นหลายคอลัมน์ ให้อ่านจากซ้ายไปขวา ทีละคอลัมน์
+
+6. การจัดการตาราง (Table Precision):
+- แปลงเป็น Markdown Table (|---|)
+- คัดลอกแบบคำต่อคำ (word-for-word)
+- ห้ามสรุป
+- ต้องครบทุกแถวและคอลัมน์
+- ต้องจัดตำแหน่งข้อมูลให้ตรงกับคอลัมน์เดิม
+- หากมี merged cell ให้กระจายข้อมูลให้ถูกต้อง
+- หาก cell มีหลายบรรทัด ให้รวมเป็นบรรทัดเดียว
+
+7. ขอบเขตหน้า:
+- สกัดเฉพาะหน้า {page_range} เท่านั้น
+
+8. Fallback:
+- หากไม่สามารถแยกโครงสร้างได้ ให้แสดงเป็น raw text โดยไม่ดัดแปลง
+
+9. Validation:
+- ตรวจสอบความครบถ้วนของข้อมูลก่อนตอบทุกครั้ง
+
+### รูปแบบการตอบ:
+- ตอบเป็น Markdown เท่านั้น
+- หากข้อมูลยาว ให้หยุดเมื่อจบย่อหน้าหรือตาราง
+- รักษาการเว้นวรรคและวรรคตอนตามต้นฉบับ
+- ห้ามแปลงคำย่อหรือขยายความ
 """
 
 # ===========================================================================================================
