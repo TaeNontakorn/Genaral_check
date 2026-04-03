@@ -6,7 +6,6 @@ st.set_page_config(page_title="Check", layout="wide")
 
 API_URL     = "https://genaral-check.onrender.com/check"
 COMPARE_URL = "https://genaral-check.onrender.com/compare"
-
 st.markdown("<style>iframe { border: none; }</style>", unsafe_allow_html=True)
 
 # =========================================================
@@ -48,8 +47,21 @@ with col_up:
         type=["pdf", "docx", "xlsx", "csv"],
         key="quotation_uploader",
     )
+    check_sheet = ""
+    check_columns = []
     if uploaded_file:
         st.markdown(f"✔️ **อัปโหลดสำเร็จ** — `{uploaded_file.name}`")
+        if uploaded_file.name.lower().endswith(".xlsx"):
+            excel_file = pd.ExcelFile(uploaded_file)
+            sheet_names = excel_file.sheet_names
+            check_sheet = st.selectbox("เลือก Sheet ที่ต้องการ:", sheet_names, key="check_sheet_select")
+            df_check = pd.read_excel(uploaded_file, sheet_name=check_sheet)
+            check_columns = st.multiselect(
+                "เลือก Column ที่ต้องการตรวจสอบ (ปล่อยว่างเพื่อตรวจทั้งหมด):",
+                options=df_check.columns.tolist(),
+                key="check_columns_select",
+            )
+
 with col_preview:
     if uploaded_file and uploaded_file.name.lower().endswith(".pdf"):
         render_pdf(uploaded_file)
@@ -62,18 +74,31 @@ if btn_check:
         with check_result_area:
             st.warning("กรุณาอัปโหลดไฟล์ก่อน")
     else:
-        with st.spinner("กำลังประมวลผล..."):
+        with st.status("กำลังประมวลผล...", expanded=True) as status:
             try:
+                is_xlsx = uploaded_file.name.lower().endswith((".xlsx", ".csv"))
+                st.write("📤 กำลังส่งไฟล์ไปยัง server...")
                 r = call_api(
                     API_URL,
                     files={"quotation": (uploaded_file.name, uploaded_file.getvalue())},
-                    data={"api_key": api_key},
+                    data={
+                        "api_key": api_key,
+                        "sheet_name": check_sheet,
+                        "columns": ",".join(check_columns),
+                    },
                 )
+                if is_xlsx:
+                    st.write("🔍 กำลังตรวจสอบความขัดแย้งของข้อมูล...")
+                else:
+                    st.write("🔍 กำลังตรวจสอบคำผิดด้วย AI...")
                 st.session_state["check_result"] = r
+                status.update(label="✅ ตรวจสอบเสร็จสิ้น", state="complete", expanded=False)
             except requests.exceptions.ConnectionError:
+                status.update(label="❌ เชื่อมต่อไม่ได้", state="error")
                 with check_result_area:
                     st.error("ไม่สามารถเชื่อมต่อ API ได้")
             except Exception as e:
+                status.update(label="❌ เกิดข้อผิดพลาด", state="error")
                 with check_result_area:
                     st.error(f"เกิดข้อผิดพลาด: {e}")
 
@@ -117,18 +142,56 @@ st.subheader("🔄 เปรียบเทียบเอกสาร")
 st.caption("อัปโหลด 2 ไฟล์เพื่อเปรียบเทียบเนื้อหาว่าต่างกันตรงไหน")
 
 col_a, col_b = st.columns(2)
+selected_sheet_a, selected_columns_a = "", []
+selected_sheet_b, selected_columns_b = "", []
+
 with col_a:
     main_document = st.file_uploader("📄 เอกสาร A", type=["pdf", "docx", "xlsx", "csv"], key="main_document")
     if main_document:
         st.markdown(f"✔️ `{main_document.name}`")
         if main_document.name.lower().endswith(".pdf"):
             render_pdf(main_document)
+            
+        if main_document.name.lower().endswith(".xlsx"):
+            excel_file_a = pd.ExcelFile(main_document)
+            selected_sheet_a = st.selectbox("เลือก Sheet ที่ต้องการ:", excel_file_a.sheet_names, key="sheet_select_a")
+            df_a = pd.read_excel(main_document, sheet_name=selected_sheet_a)
+            selected_columns_a = st.multiselect(
+                "เลือก Column ที่ต้องการแสดง (ปล่อยว่างเพื่อแสดงทั้งหมด):",
+                options=df_a.columns.tolist(),
+                key="columns_select_a",
+            )
+            display_df_a = df_a[selected_columns_a] if selected_columns_a else df_a
+            st.subheader(f"📊 พรีวิวข้อมูล: {selected_sheet_a}")
+            st.dataframe(display_df_a, use_container_width=True)
+        else:
+            selected_sheet_a = ""
+            selected_columns_a = []
+
+        
 with col_b:
     secon_document = st.file_uploader("📄 เอกสาร B", type=["pdf", "docx", "xlsx", "csv"], key="secon_document")
     if secon_document:
         st.markdown(f"✔️ `{secon_document.name}`")
         if secon_document.name.lower().endswith(".pdf"):
             render_pdf(secon_document)
+        
+        if secon_document.name.lower().endswith(".xlsx"):
+            excel_file_b = pd.ExcelFile(secon_document)
+            selected_sheet_b = st.selectbox("เลือก Sheet ที่ต้องการ:", excel_file_b.sheet_names, key="sheet_select_b")
+            df_b = pd.read_excel(secon_document, sheet_name=selected_sheet_b)
+            selected_columns_b = st.multiselect(
+                "เลือก Column ที่ต้องการแสดง (ปล่อยว่างเพื่อแสดงทั้งหมด):",
+                options=df_b.columns.tolist(),
+                key="columns_select_b",
+            )
+            display_df_b = df_b[selected_columns_b] if selected_columns_b else df_b
+            st.subheader(f"📊 พรีวิวข้อมูล: {selected_sheet_b}")
+            st.dataframe(display_df_b, use_container_width=True)
+        else:
+            selected_sheet_b = ""
+            selected_columns_b = []
+
 
 btn_compare = st.button("🔄 เปรียบเทียบเอกสาร", use_container_width=True, key="btn_compare")
 compare_result_area = st.container()
@@ -144,23 +207,36 @@ if btn_compare:
         with compare_result_area:
             st.warning(f"กรุณาอัปโหลด: {', '.join(missing)}")
     else:
-        with st.spinner("กำลังเปรียบเทียบเอกสาร..."):
+        with st.status("กำลังเปรียบเทียบเอกสาร...", expanded=True) as status:
             try:
+                st.write("📤 กำลังส่งไฟล์ทั้งสองไปยัง server...")
+                payload = {
+                    "api_key": api_key,
+                    "sheet_a": selected_sheet_a if main_document.name.endswith(".xlsx") else "",
+                    "sheet_b": selected_sheet_b if secon_document.name.endswith(".xlsx") else "",
+                    "columns_a": ",".join(selected_columns_a),
+                    "columns_b": ",".join(selected_columns_b),
+                }
+                st.write("📄 กำลังอ่านและแปลงเนื้อหาเอกสาร...")
                 r = call_api(
                     COMPARE_URL,
                     files={
                         "main_document":  (main_document.name,  main_document.getvalue()),
                         "secon_document": (secon_document.name, secon_document.getvalue()),
                     },
-                    data={"api_key": api_key},
+                    data=payload,
                 )
+                st.write("🤖 AI กำลังวิเคราะห์ความแตกต่าง...")
                 st.session_state["compare_result"] = r
                 st.session_state["compare_name_a"] = main_document.name
                 st.session_state["compare_name_b"] = secon_document.name
+                status.update(label="✅ เปรียบเทียบเสร็จสิ้น", state="complete", expanded=False)
             except requests.exceptions.ConnectionError:
+                status.update(label="❌ เชื่อมต่อไม่ได้", state="error")
                 with compare_result_area:
                     st.error("ไม่สามารถเชื่อมต่อ API ได้")
             except Exception as e:
+                status.update(label="❌ เกิดข้อผิดพลาด", state="error")
                 with compare_result_area:
                     st.error(f"เกิดข้อผิดพลาด: {e}")
 

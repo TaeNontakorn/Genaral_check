@@ -218,9 +218,30 @@ def smart_docx_extract(file_path: str) -> str:
 #                                      Excel / CSV Read
 # ================================================================================================
 
-def convert_excel_to_markdown(file_path: str) -> str:
-    df = pd.read_excel(file_path)
-    return df.to_markdown(index=False)
+def get_sheet_names(file_path: str) -> list:
+    return pd.ExcelFile(file_path).sheet_names
+
+def convert_excel_to_markdown(file_path: str, sheet_name: Optional[str] = None, columns: Optional[list] = None) -> str:
+    if sheet_name:
+        df = pd.read_excel(file_path, sheet_name=sheet_name)
+        if df.empty:
+            return "(ไม่มีข้อมูลใน sheet นี้)"
+        if columns:
+            valid_cols = [c for c in columns if c in df.columns]
+            if valid_cols:
+                df = df[valid_cols]
+        return f"### Sheet: {sheet_name}\n{df.to_markdown(index=False)}"
+    else:
+        sheets = pd.read_excel(file_path, sheet_name=None)
+        parts = []
+        for sname, df in sheets.items():
+            if not df.empty:
+                if columns:
+                    valid_cols = [c for c in columns if c in df.columns]
+                    if valid_cols:
+                        df = df[valid_cols]
+                parts.append(f"### Sheet: {sname}\n{df.to_markdown(index=False)}")
+        return "\n\n".join(parts) if parts else "(ไม่มีข้อมูลในไฟล์)"
 
 def convert_csv_to_markdown(file_path: str) -> str:
     df = pd.read_csv(file_path)
@@ -231,7 +252,7 @@ def convert_csv_to_markdown(file_path: str) -> str:
 #                                     Extract (shared utility)
 # ================================================================================================
 
-async def extract_text(upload: UploadFile, gemini_client: genai.Client) -> str:
+async def extract_text(upload: UploadFile, gemini_client: genai.Client, sheet_name: Optional[str] = None, columns: Optional[list] = None) -> str:
     """Extract text จากไฟล์ที่อัปโหลด รองรับ PDF, DOCX, XLSX, CSV"""
     file_bytes = await upload.read()
     suffix = os.path.splitext(upload.filename)[1] or ".tmp"
@@ -254,8 +275,10 @@ async def extract_text(upload: UploadFile, gemini_client: genai.Client) -> str:
         ) or (file_type == "application/zip" and upload.filename.lower().endswith(".docx")):
             return smart_docx_extract(tmp_path)
 
-        elif file_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
-            return convert_excel_to_markdown(tmp_path)
+        elif file_type in (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ) or (file_type == "application/zip" and upload.filename.lower().endswith(".xlsx")):
+            return convert_excel_to_markdown(tmp_path, sheet_name=sheet_name, columns=columns)
 
         elif file_type in ("text/csv", "text/plain") and upload.filename.lower().endswith(".csv"):
             return convert_csv_to_markdown(tmp_path)
@@ -365,7 +388,7 @@ def compare_documents(text_a: str, text_b: str, name_a: str, name_b: str, gemini
         ภารกิจของคุณ:
         1. ระบุข้อความ / ข้อมูล / ตัวเลข ที่มีอยู่ใน {name_a} แต่ไม่มีใน {name_b}
         2. ระบุข้อความ / ข้อมูล / ตัวเลข ที่มีอยู่ใน {name_b} แต่ไม่มีใน {name_a}
-        3. ระบุข้อความที่มีทั้งสองฉบับ แต่มีความแตกต่างกัน (เช่น ตัวเลขต่างกัน, ชื่อต่างกัน)
+        3. ระบุข้อความที่มีทั้งสองฉบับ แต่มีความแตกต่างกัน ทั้งหมด (เช่น ตัวเลขต่างกัน, ชื่อต่างกัน)
         4. สรุปภาพรวมว่าเอกสารทั้งสองมีความแตกต่างกันมากน้อยแค่ไหน
 
         รายงานผลเป็นภาษาไทย จัดหมวดหมู่ให้ชัดเจน ถ้าไม่เจอหมวดหมู่ที่มีปัญหาไม่ต้องรายงาน
@@ -387,6 +410,8 @@ def compare_documents(text_a: str, text_b: str, name_a: str, name_b: str, gemini
 async def check(
     quotation: UploadFile = File(...),
     api_key: str = Form(""),
+    sheet_name: str = Form(""),
+    columns: str = Form(""),
 ):
     key = get_api_key(api_key)
     gemini_client = genai.Client(api_key=key)
@@ -416,7 +441,8 @@ async def check(
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         ) or (file_type in ("text/csv", "text/plain") and suffix == ".csv")
 
-        document_text = await extract_text(quotation, gemini_client)
+        cols = [c.strip() for c in columns.split(",") if c.strip()] if columns else None
+        document_text = await extract_text(quotation, gemini_client, sheet_name=sheet_name or None, columns=cols)
 
         if is_table:
             logger.info("[ TABLE CHECK ] ตรวจข้อมูลตาราง...")
@@ -443,6 +469,10 @@ async def compare(
     main_document: UploadFile = File(...),
     secon_document: UploadFile = File(...),
     api_key: str = Form(""),
+    sheet_a: str = Form(""),
+    sheet_b: str = Form(""),
+    columns_a: str = Form(""),
+    columns_b: str = Form(""),
 ):
     key = get_api_key(api_key)
     gemini_client = genai.Client(api_key=key)
@@ -450,10 +480,19 @@ async def compare(
     try:
         logger.info("[ COMPARE ] กำลัง extract ทั้ง 2 ไฟล์...")
 
+        # อ่าน bytes ก่อน แล้ว reset stream เพื่อให้ extract_text อ่านได้ถูกต้อง
+        import io
+        bytes_a = await main_document.read()
+        bytes_b = await secon_document.read()
+        main_document.file = io.BytesIO(bytes_a)
+        secon_document.file = io.BytesIO(bytes_b)
+
         # extract ทั้งคู่พร้อมกัน
+        cols_a = [c.strip() for c in columns_a.split(",") if c.strip()] if columns_a else None
+        cols_b = [c.strip() for c in columns_b.split(",") if c.strip()] if columns_b else None
         text_a, text_b = await asyncio.gather(
-            extract_text(main_document, gemini_client),
-            extract_text(secon_document, gemini_client),
+            extract_text(main_document, gemini_client, sheet_name=sheet_a or None, columns=cols_a),
+            extract_text(secon_document, gemini_client, sheet_name=sheet_b or None, columns=cols_b),
         )
 
         logger.info("[ COMPARE ] กำลังเปรียบเทียบ...")
