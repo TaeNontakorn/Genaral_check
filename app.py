@@ -165,6 +165,18 @@ with col_a:
             display_df_a = df_a[selected_columns_a] if selected_columns_a else df_a
             st.subheader(f"📊 พรีวิวข้อมูล: {selected_sheet_a}")
             st.dataframe(display_df_a, use_container_width=True)
+            
+        elif main_document.name.lower().endswith(".csv"):
+            df_a = pd.read_csv(main_document)
+            selected_columns_a = st.multiselect(
+                "เลือก Column ที่ต้องการแสดง (ปล่อยว่างเพื่อแสดงทั้งหมด):",
+                options=df_a.columns.tolist(),
+                key="columns_select_a",
+            )
+            display_df_a = df_a[selected_columns_a] if selected_columns_a else df_a
+            st.subheader("📊 พรีวิวข้อมูล CSV")
+            st.dataframe(display_df_a, use_container_width=True)
+            selected_sheet_a = ""
         else:
             selected_sheet_a = ""
             selected_columns_a = []
@@ -189,6 +201,17 @@ with col_b:
             display_df_b = df_b[selected_columns_b] if selected_columns_b else df_b
             st.subheader(f"📊 พรีวิวข้อมูล: {selected_sheet_b}")
             st.dataframe(display_df_b, use_container_width=True)
+        elif secon_document.name.lower().endswith(".csv"):
+            df_b = pd.read_csv(secon_document)
+            selected_columns_b = st.multiselect(
+                "เลือก Column ที่ต้องการแสดง (ปล่อยว่างเพื่อแสดงทั้งหมด):",
+                options=df_b.columns.tolist(),
+                key="columns_select_b",
+            )
+            display_df_b = df_b[selected_columns_b] if selected_columns_b else df_b
+            st.subheader("📊 พรีวิวข้อมูล CSV")
+            st.dataframe(display_df_b, use_container_width=True)
+            selected_sheet_b = ""
         else:
             selected_sheet_b = ""
             selected_columns_b = []

@@ -243,8 +243,12 @@ def convert_excel_to_markdown(file_path: str, sheet_name: Optional[str] = None, 
                 parts.append(f"### Sheet: {sname}\n{df.to_markdown(index=False)}")
         return "\n\n".join(parts) if parts else "(ไม่มีข้อมูลในไฟล์)"
 
-def convert_csv_to_markdown(file_path: str) -> str:
+def convert_csv_to_markdown(file_path: str, columns: Optional[list] = None) -> str:
     df = pd.read_csv(file_path)
+    if columns:
+        valid_cols = [c for c in columns if c in df.columns]
+        if valid_cols:
+            df = df[valid_cols]
     return df.to_markdown(index=False)
 
 
@@ -281,7 +285,7 @@ async def extract_text(upload: UploadFile, gemini_client: genai.Client, sheet_na
             return convert_excel_to_markdown(tmp_path, sheet_name=sheet_name, columns=columns)
 
         elif file_type in ("text/csv", "text/plain") and upload.filename.lower().endswith(".csv"):
-            return convert_csv_to_markdown(tmp_path)
+            return convert_csv_to_markdown(tmp_path, columns=columns)
 
         else:
             raise ValueError(f"Unsupported file type: {file_type}. Please upload PDF, DOCX, XLSX, or CSV.")
