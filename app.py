@@ -5,8 +5,8 @@ import pandas as pd
 
 st.set_page_config(page_title="Check", layout="wide")
 
-API_URL     = "https://genaral-check.onrender.com/check"
-COMPARE_URL = "https://genaral-check.onrender.com/compare"
+API_URL     = "https://genaral-check-1.onrender.com/check"
+COMPARE_URL = "https://genaral-check-1.onrender.com/compare"
 st.markdown("<style>iframe { border: none; }</style>", unsafe_allow_html=True)
 
 # =========================================================
