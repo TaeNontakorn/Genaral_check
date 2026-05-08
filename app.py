@@ -267,7 +267,17 @@ st.markdown("---")
 # ส่วนที่ 2: เปรียบเทียบเอกสาร (2-Phase)
 # =========================================================
 st.subheader("🔄 เปรียบเทียบเอกสาร")
-st.caption("**ขั้นตอนที่ 1:** OCR เอกสารก่อน → เลือกคอลัมน์ที่ต้องการ → **ขั้นตอนที่ 2:** เปรียบเทียบ")
+compare_mode = st.radio(
+    "เลือกประเภทการเปรียบเทียบ",
+    ["เปรียบเทียบทั้งไฟล์", "เลือกคอลัมน์"],
+    key="compare_mode_select",
+    horizontal=True
+)
+
+if compare_mode == "เปรียบเทียบทั้งไฟล์":
+    st.caption("🚀 **โหมดเปรียบเทียบทั้งไฟล์:** AI จะวิเคราะห์เนื้อหาและตารางทั้งหมดในเอกสารโดยละเอียด")
+else:
+    st.caption("🎯 **โหมดเลือกคอลัมน์:** ขั้นตอนที่ 1: OCR เพื่อดูตาราง -> ขั้นตอนที่ 2: เลือกคอลัมน์ที่ต้องการ -> ขั้นตอนที่ 3: เปรียบเทียบ")
 
 col_a, col_b = st.columns(2)
 page_range_a, page_range_b = "", ""
@@ -324,9 +334,12 @@ with col_b:
             st.dataframe(df_b[selected_columns_b] if selected_columns_b else df_b, use_container_width=True)
             selected_sheet_b = ""
 
-# ── Phase 1: OCR ──────────────────────────────────────────
-st.markdown("#### ขั้นตอนที่ 1 — OCR เอกสาร (สำหรับ PDF/DOCX)")
-btn_ocr = st.button("🔍 OCR ทั้งสองเอกสาร", use_container_width=True, key="btn_ocr")
+# ── Phase 1: OCR (เฉพาะโหมดเลือกคอลัมน์) ──────────────────────────
+if compare_mode == "เลือกคอลัมน์":
+    st.markdown("#### ขั้นตอนที่ 1 — OCR เอกสารเพื่อเลือกคอลัมน์")
+    btn_ocr = st.button("🔍 OCR ทั้งสองเอกสาร", use_container_width=True, key="btn_ocr")
+else:
+    btn_ocr = False # ไม่แสดงปุ่ม OCR ในโหมดเปรียบเทียบทั้งไฟล์
 
 if btn_ocr:
     missing = []
@@ -396,8 +409,8 @@ if "ocr_text_a" in st.session_state and "ocr_text_b" in st.session_state:
                 st.text(st.session_state["ocr_text_b"])
 
 # ── Phase 2: Compare ──────────────────────────────────────
-st.markdown("#### ขั้นตอนที่ 2 — เปรียบเทียบเอกสาร")
-btn_compare = st.button("🔄 เปรียบเทียบเอกสาร", use_container_width=True, key="btn_compare")
+st.markdown(f"#### ขั้นตอนที่ {'2' if compare_mode == 'เลือกคอลัมน์' else '1'} — เปรียบเทียบเอกสาร")
+btn_compare = st.button("🔄 เริ่มเปรียบเทียบ", use_container_width=True, key="btn_compare")
 compare_result_area = st.container()
 
 if btn_compare:
@@ -410,8 +423,8 @@ if btn_compare:
     else:
         with st.status("กำลังเปรียบเทียบเอกสาร...", expanded=True) as status:
             try:
-                # ถ้ามี OCR ไว้แล้ว ใช้ /compare_text (เร็วกว่า ไม่ต้อง OCR ซ้ำ)
-                if "ocr_text_a" in st.session_state and "ocr_text_b" in st.session_state:
+                # ถ้ามี OCR ไว้แล้ว และเป็นโหมดเลือกคอลัมน์ ใช้ /compare_text
+                if compare_mode == "เลือกคอลัมน์" and "ocr_text_a" in st.session_state and "ocr_text_b" in st.session_state:
                     st.write("🤖 AI กำลังวิเคราะห์จากข้อความที่ OCR แล้ว...")
                     all_cols = list(dict.fromkeys(ocr_cols_a + ocr_cols_b))
                     r = call_api(COMPARE_TEXT_URL, files={}, data={
@@ -421,6 +434,7 @@ if btn_compare:
                         "name_a": st.session_state.get("ocr_name_a", main_document.name),
                         "name_b": st.session_state.get("ocr_name_b", secon_document.name),
                         "target_columns": ",".join(all_cols),
+                        "compare_mode": compare_mode,
                     })
                 else:
                     # Fallback: OCR + compare ในครั้งเดียว
@@ -432,12 +446,13 @@ if btn_compare:
                         },
                         data={
                             "api_key": api_key,
-                            "sheet_a": selected_sheet_a if main_document.name.endswith(".xlsx") else "",
-                            "sheet_b": selected_sheet_b if secon_document.name.endswith(".xlsx") else "",
+                            "sheet_a": selected_sheet_a if main_document.name.lower().endswith(".xlsx") else "",
+                            "sheet_b": selected_sheet_b if secon_document.name.lower().endswith(".xlsx") else "",
                             "columns_a": ",".join(selected_columns_a),
                             "columns_b": ",".join(selected_columns_b),
                             "page_range_a": page_range_a,
                             "page_range_b": page_range_b,
+                            "compare_mode": compare_mode,
                         })
                 st.session_state["compare_result"] = r
                 st.session_state["compare_name_a"] = main_document.name

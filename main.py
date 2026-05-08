@@ -553,12 +553,17 @@ async def compare_text_endpoint(
     name_b: str = Form("เอกสาร B"),
     api_key: str = Form(""),
     target_columns: str = Form(""),
+    compare_mode: str = Form("เปรียบเทียบทั้งไฟล์"), # เพิ่มโหมด
 ):
     """compare จาก text ที่ OCR ไว้แล้ว (skip re-OCR) + รองรับ target_columns"""
     key = get_api_key(api_key)
     gemini_client = genai.Client(api_key=key)
     try:
-        cols = [c.strip() for c in target_columns.split(",") if c.strip()] if target_columns else None
+        # ถ้าโหมดเป็น "เลือกคอลัมน์" ให้ดึงรายชื่อคอลัมน์มาใช้
+        cols = None
+        if compare_mode == "เลือกคอลัมน์":
+            cols = [c.strip() for c in target_columns.split(",") if c.strip()] if target_columns else None
+            
         compare_result = await asyncio.to_thread(
             compare_documents,
             text_a, text_b, name_a, name_b, gemini_client, cols,
@@ -671,14 +676,16 @@ async def compare(
     columns_b: str = Form(""),
     page_range_a: str = Form(""),
     page_range_b: str = Form(""),
+    compare_mode: str = Form("เปรียบเทียบทั้งไฟล์"),
+    target_columns: str = Form(""),
 ):
     key = get_api_key(api_key)
     gemini_client = genai.Client(api_key=key)
 
     try:
-        logger.info("[ COMPARE ] กำลัง extract ทั้ง 2 ไฟล์...")
+        logger.info(f"[ COMPARE ] โหมด: {compare_mode}")
 
-        # อ่าน bytes ก่อน แล้ว reset stream เพื่อให้ extract_text อ่านได้ถูกต้อง
+        # อ่าน bytes ก่อน แล้ว reset stream
         import io
         bytes_a = await main_document.read()
         bytes_b = await secon_document.read()
@@ -694,11 +701,18 @@ async def compare(
         )
 
         logger.info("[ COMPARE ] กำลังเปรียบเทียบ...")
+        
+        # จัดการ target_columns ตามโหมด
+        final_target_cols = None
+        if compare_mode == "เลือกคอลัมน์":
+            final_target_cols = [c.strip() for c in target_columns.split(",") if c.strip()] if target_columns else None
+
         compare_result = await asyncio.to_thread(
             compare_documents,
             text_a, text_b,
             main_document.filename, secon_document.filename,
             gemini_client,
+            final_target_cols
         )
 
         return {
