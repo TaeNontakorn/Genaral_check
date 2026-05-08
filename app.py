@@ -108,33 +108,12 @@ if menu == "📝 ตรวจคำผิด / ตรวจข้อมูล":
             elif uploaded_file.name.lower().endswith(".pdf"):
                 reader_check = PdfReader(io.BytesIO(uploaded_file.getvalue()))
                 total_pages_check = len(reader_check.pages)
-                btn_extract_check = st.button(
-                    "📥 Step 1: OCR Preview (ดึงข้อมูลก่อนเลือกคอลัมน์)",
-                    key="btn_extract_check",
-                    use_container_width=True,
-                )
-
+                
     with col_preview:
         if uploaded_file and uploaded_file.name.lower().endswith(".pdf"):
             render_pdf(uploaded_file)
 
-    # ── Handle Extract Preview (PDF only) ────────────────────────────────────────
-    if btn_extract_check and uploaded_file:
-        with st.spinner("📥 กำลัง OCR..."):
-            try:
-                r_ext = call_api(
-                    EXTRACT_URL,
-                    files={"file": (uploaded_file.name, uploaded_file.getvalue())},
-                    data={"api_key": api_key, "page_range": page_range_check},
-                )
-                if "text" in r_ext:
-                    st.session_state["check_preview_text"] = r_ext["text"]
-                    st.session_state["check_preview_tables"] = parse_markdown_tables(r_ext["text"])
-                    st.success("✅ OCR สำเร็จ — เลือกคอลัมน์ด้านล่าง แล้วกด '🔍 Step 2'")
-                elif "error" in r_ext:
-                    st.error(r_ext["error"])
-            except Exception as e:
-                st.error(str(e))
+
 
     # ── Show table preview + column selector ─────────────────────────────────────
     check_target_columns = []
