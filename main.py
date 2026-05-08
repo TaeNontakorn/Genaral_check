@@ -351,12 +351,13 @@ async def extract_text(upload: UploadFile, gemini_client: genai.Client, sheet_na
 #                                     Check Typo (PDF / DOCX)
 # ================================================================================================
 
-def pdf_check_typo(text: str, gemini_client: genai.Client, page: Optional[int] = None) -> str:
+def pdf_check_typo(text: str, gemini_client: genai.Client, page: Optional[int] = None, target_columns: Optional[list] = None) -> str:
     page_hint = f"หน้า {page}: " if page is not None else ""
+    col_hint = f"\n\n⚠️ โฟกัสเฉพาะคอลัมน์: {', '.join(target_columns)} — ตรวจเฉพาะข้อมูลในคอลัมน์เหล่านี้เท่านั้น" if target_columns else ""
 
     prompt = f"""
         บทบาท: คุณคือบรรณาธิการตรวจทานเอกสารภาษาไทยมืออาชีพ
-        ภารกิจ: ตรวจสอบคำสะกดผิดและตรวจสอบความถูกต้องของลำดับเลขข้อ (Ordering) ในข้อความต่อไปนี้: {text}
+        ภารกิจ: ตรวจสอบคำสะกดผิดและตรวจสอบความถูกต้องของลำดับเลขข้อ (Ordering) ในข้อความต่อไปนี้: {text}{col_hint}
 
         กฎการตรวจสอบ:
         1. การสะกดคำ: 
@@ -430,10 +431,13 @@ def excel_check(table: str, gemini_client: genai.Client) -> str:
 #                                     Compare Documents
 # ================================================================================================
 
-def compare_documents(text_a: str, text_b: str, name_a: str, name_b: str, gemini_client: genai.Client) -> str:
+def compare_documents(text_a: str, text_b: str, name_a: str, name_b: str, gemini_client: genai.Client, target_columns: Optional[list] = None) -> str:
+    col_hint = ""
+    if target_columns:
+        col_hint = f"\n\n⚠️ ให้เน้นเปรียบเทียบเฉพาะคอลัมน์ต่อไปนี้เท่านั้น: {', '.join(target_columns)}\n(ข้ามคอลัมน์อื่นที่ไม่ได้ระบุ แม้ว่าจะพบความแตกต่างก็ตาม)"
     prompt = f"""
         คุณคือผู้เชี่ยวชาญด้านการตรวจสอบเอกสาร
-        ปรียบเทียบเอกสาร 2 ฉบับและรายงานความแตกต่างทั้งหมด
+        ปรียบเทียบเอกสาร 2 ฉบับและรายงานความแตกต่างทั้งหมด{col_hint}
         === กฎการเปรียบเทียบ ===
         1. ระบุความแตกต่างทุกจุด ห้ามละเว้น
         2. ตัวเลข/วันที่/ชื่อ ต้องตรวจทุกจุด
@@ -467,6 +471,77 @@ def compare_documents(text_a: str, text_b: str, name_a: str, name_b: str, gemini
 #                                     ENDPOINTS
 # ================================================================================================
 
+@app.post("/ocr")
+async def ocr_single(
+    file: UploadFile = File(...),
+    api_key: str = Form(""),
+    page_range: str = Form(""),
+):
+    """OCR เอกสารเดี่ยว → คืนข้อความล้วๆ เพื่อให้ frontend แสดง preview ก่อนเลือกคอลัมน์"""
+    key = get_api_key(api_key)
+    gemini_client = genai.Client(api_key=key)
+    try:
+        text = await extract_text(file, gemini_client, page_range=page_range or None)
+        return {"ocr_text": text}
+    except Exception as e:
+        logger.error(f"OCR ERROR: {e}")
+        return {"error": str(e)}
+
+
+@app.post("/compare_text")
+async def compare_text_endpoint(
+    text_a: str = Form(...),
+    text_b: str = Form(...),
+    name_a: str = Form("เอกสาร A"),
+    name_b: str = Form("เอกสาร B"),
+    api_key: str = Form(""),
+    target_columns: str = Form(""),
+):
+    """compare จาก text ที่ OCR ไว้แล้ว (skip re-OCR) + รองรับ target_columns"""
+    key = get_api_key(api_key)
+    gemini_client = genai.Client(api_key=key)
+    try:
+        cols = [c.strip() for c in target_columns.split(",") if c.strip()] if target_columns else None
+        compare_result = await asyncio.to_thread(
+            compare_documents,
+            text_a, text_b, name_a, name_b, gemini_client, cols,
+        )
+        return {
+            "text_a": text_a,
+            "text_b": text_b,
+            "compare_result": compare_result,
+        }
+    except Exception as e:
+        logger.error(f"COMPARE_TEXT ERROR: {e}")
+        return {"error": str(e)}
+
+
+# ── ดึงข้อมูลเปล่าๆ (ไม่วิเคราะห์) เพื่อให้ user เลือก column ──────────────────
+@app.post("/extract")
+async def extract_only(
+    file: UploadFile = File(...),
+    api_key: str = Form(""),
+    page_range: str = Form(""),
+    sheet_name: str = Form(""),
+):
+    """OCR / ดึงข้อมูล แล้ว return text ล้วนๆ ไม่วิเคราะห์"""
+    key = get_api_key(api_key)
+    gemini_client = genai.Client(api_key=key)
+    try:
+        import io
+        file_bytes = await file.read()
+        file.file = io.BytesIO(file_bytes)
+        text = await extract_text(
+            file, gemini_client,
+            page_range=page_range or None,
+            sheet_name=sheet_name or None,
+        )
+        return {"text": text}
+    except Exception as e:
+        logger.error(f"EXTRACT ERROR: {e}")
+        return {"error": str(e)}
+
+
 @app.post("/check")
 async def check(
     quotation: UploadFile = File(...),
@@ -474,6 +549,7 @@ async def check(
     sheet_name: str = Form(""),
     columns: str = Form(""),
     page_range: str = Form(""),
+    target_columns: str = Form(""),   # คอลัมน์ที่ user เลือกหลัง OCR preview
 ):
     key = get_api_key(api_key)
     gemini_client = genai.Client(api_key=key)
@@ -515,7 +591,8 @@ async def check(
             }
         else:
             logger.info("[ TYPO ] ตรวจคำผิด...")
-            typo_result = await asyncio.to_thread(pdf_check_typo, document_text, gemini_client)
+            tcols = [c.strip() for c in target_columns.split(",") if c.strip()] if target_columns else None
+            typo_result = await asyncio.to_thread(pdf_check_typo, document_text, gemini_client, target_columns=tcols)
             return {
                 "ocr_text": document_text,
                 "typo_result": typo_result,

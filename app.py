@@ -7,13 +7,53 @@ from pypdf import PdfReader
 
 st.set_page_config(page_title="Check", layout="wide")
 
-API_URL     = "https://genaral-check-1.onrender.com/check"
-COMPARE_URL = "https://genaral-check-1.onrender.com/compare"
+API_URL          = "https://genaral-check-1.onrender.com/check"
+COMPARE_URL      = "https://genaral-check-1.onrender.com/compare"
+OCR_URL          = "https://genaral-check-1.onrender.com/ocr"
+EXTRACT_URL      = "https://genaral-check-1.onrender.com/extract"
+COMPARE_TEXT_URL = "https://genaral-check-1.onrender.com/compare_text"
 st.markdown("<style>iframe { border: none; }</style>", unsafe_allow_html=True)
 
 # =========================================================
 # Helpers
 # =========================================================
+import re
+
+def parse_markdown_tables(md_text: str) -> list:
+    """แยก markdown tables จาก OCR text → list of pd.DataFrame"""
+    tables = []
+    lines = md_text.split("\n")
+    buf = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("|"):
+            buf.append(stripped)
+        else:
+            if buf:
+                df = _md_buf_to_df(buf)
+                if df is not None:
+                    tables.append(df)
+                buf = []
+    if buf:
+        df = _md_buf_to_df(buf)
+        if df is not None:
+            tables.append(df)
+    return tables
+
+def _md_buf_to_df(lines: list):
+    data_lines = [l for l in lines if not re.match(r'^\|[\s\-:|]+\|$', l)]
+    if len(data_lines) < 2:
+        return None
+    rows = [[c.strip() for c in l.split("|")[1:-1]] for l in data_lines]
+    if not rows:
+        return None
+    try:
+        max_c = max(len(r) for r in rows)
+        padded = [r + [""] * (max_c - len(r)) for r in rows]
+        return pd.DataFrame(padded[1:], columns=padded[0])
+    except Exception:
+        return None
+
 def render_pdf(file):
     b64 = base64.b64encode(file.getvalue()).decode("utf-8")
     st.markdown(
@@ -28,6 +68,35 @@ def call_api(url, files, data):
         return response.json()
     except ValueError:
         return {"raw": response.text}
+
+def parse_markdown_tables(text: str) -> list:
+    """Parse markdown tables from OCR output into list of DataFrames"""
+    import re
+    tables = []
+    pattern = re.compile(
+        r'((?:\|[^\n]+\|\n)+)',
+        re.MULTILINE,
+    )
+    for match in pattern.finditer(text):
+        block = match.group(1).strip()
+        lines = [l.strip() for l in block.split('\n') if l.strip()]
+        # separate header, separator, data
+        data_lines = [l for l in lines if not re.match(r'^\|[-\s|:]+\|$', l)]
+        if len(data_lines) < 2:
+            continue
+        try:
+            headers = [h.strip() for h in data_lines[0].strip('|').split('|')]
+            headers = [h for h in headers if h]
+            rows = []
+            for line in data_lines[1:]:
+                cells = [c.strip() for c in line.strip('|').split('|')]
+                if len(cells) == len(headers):
+                    rows.append(cells)
+            if headers and rows:
+                tables.append(pd.DataFrame(rows, columns=headers))
+        except Exception:
+            continue
+    return tables
 
 # =========================================================
 # UI
@@ -53,6 +122,7 @@ with col_up:
     check_sheet = ""
     check_columns = []
     page_range_check = ""
+    btn_extract_check = False
     if uploaded_file:
         st.markdown(f"✔️ **อัปโหลดสำเร็จ** — `{uploaded_file.name}`")
         if uploaded_file.name.lower().endswith(".xlsx"):
@@ -73,12 +143,56 @@ with col_up:
                 f"📌 ระบุหน้าที่ต้องการตรวจ (เช่น 1-3, 5 — ปล่อยว่างเพื่อตรวจทั้ง {total_pages_check} หน้า):",
                 key="check_page_range",
             )
+            btn_extract_check = st.button(
+                "📥 Step 1: OCR Preview (ดึงข้อมูลก่อนเลือกคอลัมน์)",
+                key="btn_extract_check",
+                use_container_width=True,
+            )
 
 with col_preview:
     if uploaded_file and uploaded_file.name.lower().endswith(".pdf"):
         render_pdf(uploaded_file)
 
-btn_check = st.button("🔍 ตรวจสอบ", use_container_width=True, key="btn_check")
+# ── Handle Extract Preview (PDF only) ────────────────────────────────────────
+if btn_extract_check and uploaded_file:
+    with st.spinner("📥 กำลัง OCR..."):
+        try:
+            r_ext = call_api(
+                EXTRACT_URL,
+                files={"file": (uploaded_file.name, uploaded_file.getvalue())},
+                data={"api_key": api_key, "page_range": page_range_check},
+            )
+            if "text" in r_ext:
+                st.session_state["check_preview_text"] = r_ext["text"]
+                st.session_state["check_preview_tables"] = parse_markdown_tables(r_ext["text"])
+                st.success("✅ OCR สำเร็จ — เลือกคอลัมน์ด้านล่าง แล้วกด '🔍 Step 2'")
+            elif "error" in r_ext:
+                st.error(r_ext["error"])
+        except Exception as e:
+            st.error(str(e))
+
+# ── Show table preview + column selector ─────────────────────────────────────
+check_target_columns = []
+if "check_preview_tables" in st.session_state and uploaded_file and uploaded_file.name.lower().endswith(".pdf"):
+    tables = st.session_state["check_preview_tables"]
+    if tables:
+        st.markdown("### 📊 ตารางที่พบใน PDF")
+        all_cols = []
+        for i, df_t in enumerate(tables):
+            with st.expander(f"ตารางที่ {i+1} — {len(df_t)} แถว, {len(df_t.columns)} คอลัมน์", expanded=(i == 0)):
+                st.dataframe(df_t, use_container_width=True)
+            all_cols.extend(df_t.columns.tolist())
+        all_cols = list(dict.fromkeys(all_cols))
+        check_target_columns = st.multiselect(
+            "🎯 เลือกคอลัมน์ที่ต้องการวิเคราะห์ (ปล่อยว่างเพื่อวิเคราะห์ทั้งหมด):",
+            options=all_cols,
+            key="check_target_cols_select",
+        )
+    else:
+        with st.expander("📄 ข้อความที่ได้จาก OCR"):
+            st.text(st.session_state.get("check_preview_text", ""))
+
+btn_check = st.button("🔍 Step 2: ตรวจสอบ", use_container_width=True, key="btn_check")
 check_result_area = st.container()
 
 if btn_check:
@@ -98,6 +212,7 @@ if btn_check:
                         "sheet_name": check_sheet,
                         "columns": ",".join(check_columns),
                         "page_range": page_range_check,
+                        "target_columns": ",".join(check_target_columns),
                     },
                 )
                 if is_xlsx:
@@ -149,15 +264,15 @@ if "check_result" in st.session_state:
 st.markdown("---")
 
 # =========================================================
-# ส่วนที่ 2: เปรียบเทียบเอกสาร
+# ส่วนที่ 2: เปรียบเทียบเอกสาร (2-Phase)
 # =========================================================
 st.subheader("🔄 เปรียบเทียบเอกสาร")
-st.caption("อัปโหลด 2 ไฟล์เพื่อเปรียบเทียบเนื้อหาว่าต่างกันตรงไหน")
+st.caption("**ขั้นตอนที่ 1:** OCR เอกสารก่อน → เลือกคอลัมน์ที่ต้องการ → **ขั้นตอนที่ 2:** เปรียบเทียบ")
 
 col_a, col_b = st.columns(2)
+page_range_a, page_range_b = "", ""
 selected_sheet_a, selected_columns_a = "", []
 selected_sheet_b, selected_columns_b = "", []
-page_range_a, page_range_b = "", ""
 
 with col_a:
     main_document = st.file_uploader("📄 เอกสาร A", type=["pdf", "docx", "xlsx", "csv"], key="main_document")
@@ -172,36 +287,18 @@ with col_a:
                 key="compare_page_range_a",
             )
             render_pdf(main_document)
-            
         if main_document.name.lower().endswith(".xlsx"):
             excel_file_a = pd.ExcelFile(main_document)
-            selected_sheet_a = st.selectbox("เลือก Sheet ที่ต้องการ:", excel_file_a.sheet_names, key="sheet_select_a")
+            selected_sheet_a = st.selectbox("เลือก Sheet:", excel_file_a.sheet_names, key="sheet_select_a")
             df_a = pd.read_excel(main_document, sheet_name=selected_sheet_a)
-            selected_columns_a = st.multiselect(
-                "เลือก Column ที่ต้องการแสดง (ปล่อยว่างเพื่อแสดงทั้งหมด):",
-                options=df_a.columns.tolist(),
-                key="columns_select_a",
-            )
-            display_df_a = df_a[selected_columns_a] if selected_columns_a else df_a
-            st.subheader(f"📊 พรีวิวข้อมูล: {selected_sheet_a}")
-            st.dataframe(display_df_a, use_container_width=True)
-            
+            selected_columns_a = st.multiselect("เลือก Column (ปล่อยว่าง = ทั้งหมด):", df_a.columns.tolist(), key="columns_select_a")
+            st.dataframe(df_a[selected_columns_a] if selected_columns_a else df_a, use_container_width=True)
         elif main_document.name.lower().endswith(".csv"):
             df_a = pd.read_csv(main_document)
-            selected_columns_a = st.multiselect(
-                "เลือก Column ที่ต้องการแสดง (ปล่อยว่างเพื่อแสดงทั้งหมด):",
-                options=df_a.columns.tolist(),
-                key="columns_select_a",
-            )
-            display_df_a = df_a[selected_columns_a] if selected_columns_a else df_a
-            st.subheader("📊 พรีวิวข้อมูล CSV")
-            st.dataframe(display_df_a, use_container_width=True)
+            selected_columns_a = st.multiselect("เลือก Column (ปล่อยว่าง = ทั้งหมด):", df_a.columns.tolist(), key="columns_select_a")
+            st.dataframe(df_a[selected_columns_a] if selected_columns_a else df_a, use_container_width=True)
             selected_sheet_a = ""
-        else:
-            selected_sheet_a = ""
-            selected_columns_a = []
 
-        
 with col_b:
     secon_document = st.file_uploader("📄 เอกสาร B", type=["pdf", "docx", "xlsx", "csv"], key="secon_document")
     if secon_document:
@@ -215,71 +312,133 @@ with col_b:
                 key="compare_page_range_b",
             )
             render_pdf(secon_document)
-        
         if secon_document.name.lower().endswith(".xlsx"):
             excel_file_b = pd.ExcelFile(secon_document)
-            selected_sheet_b = st.selectbox("เลือก Sheet ที่ต้องการ:", excel_file_b.sheet_names, key="sheet_select_b")
+            selected_sheet_b = st.selectbox("เลือก Sheet:", excel_file_b.sheet_names, key="sheet_select_b")
             df_b = pd.read_excel(secon_document, sheet_name=selected_sheet_b)
-            selected_columns_b = st.multiselect(
-                "เลือก Column ที่ต้องการแสดง (ปล่อยว่างเพื่อแสดงทั้งหมด):",
-                options=df_b.columns.tolist(),
-                key="columns_select_b",
-            )
-            display_df_b = df_b[selected_columns_b] if selected_columns_b else df_b
-            st.subheader(f"📊 พรีวิวข้อมูล: {selected_sheet_b}")
-            st.dataframe(display_df_b, use_container_width=True)
+            selected_columns_b = st.multiselect("เลือก Column (ปล่อยว่าง = ทั้งหมด):", df_b.columns.tolist(), key="columns_select_b")
+            st.dataframe(df_b[selected_columns_b] if selected_columns_b else df_b, use_container_width=True)
         elif secon_document.name.lower().endswith(".csv"):
             df_b = pd.read_csv(secon_document)
-            selected_columns_b = st.multiselect(
-                "เลือก Column ที่ต้องการแสดง (ปล่อยว่างเพื่อแสดงทั้งหมด):",
-                options=df_b.columns.tolist(),
-                key="columns_select_b",
+            selected_columns_b = st.multiselect("เลือก Column (ปล่อยว่าง = ทั้งหมด):", df_b.columns.tolist(), key="columns_select_b")
+            st.dataframe(df_b[selected_columns_b] if selected_columns_b else df_b, use_container_width=True)
+            selected_sheet_b = ""
+
+# ── Phase 1: OCR ──────────────────────────────────────────
+st.markdown("#### ขั้นตอนที่ 1 — OCR เอกสาร (สำหรับ PDF/DOCX)")
+btn_ocr = st.button("🔍 OCR ทั้งสองเอกสาร", use_container_width=True, key="btn_ocr")
+
+if btn_ocr:
+    missing = []
+    if not main_document: missing.append("เอกสาร A")
+    if not secon_document: missing.append("เอกสาร B")
+    if missing:
+        st.warning(f"กรุณาอัปโหลด: {', '.join(missing)}")
+    else:
+        with st.status("กำลัง OCR เอกสาร...", expanded=True) as ocr_status:
+            try:
+                st.write("📤 กำลัง OCR เอกสาร A...")
+                r_ocr_a = call_api(OCR_URL,
+                    files={"file": (main_document.name, main_document.getvalue())},
+                    data={"api_key": api_key, "page_range": page_range_a})
+                st.write("📤 กำลัง OCR เอกสาร B...")
+                r_ocr_b = call_api(OCR_URL,
+                    files={"file": (secon_document.name, secon_document.getvalue())},
+                    data={"api_key": api_key, "page_range": page_range_b})
+                if "error" in r_ocr_a:
+                    st.error(f"เอกสาร A: {r_ocr_a['error']}")
+                elif "error" in r_ocr_b:
+                    st.error(f"เอกสาร B: {r_ocr_b['error']}")
+                else:
+                    st.session_state["ocr_text_a"] = r_ocr_a.get("ocr_text", "")
+                    st.session_state["ocr_text_b"] = r_ocr_b.get("ocr_text", "")
+                    st.session_state["ocr_name_a"] = main_document.name
+                    st.session_state["ocr_name_b"] = secon_document.name
+                    ocr_status.update(label="✅ OCR เสร็จสิ้น — เลือกคอลัมน์ด้านล่าง", state="complete", expanded=False)
+            except Exception as e:
+                ocr_status.update(label="❌ OCR ล้มเหลว", state="error")
+                st.error(f"เกิดข้อผิดพลาด: {e}")
+
+# ── แสดงผล OCR + Column Selector ─────────────────────────
+ocr_cols_a, ocr_cols_b = [], []
+if "ocr_text_a" in st.session_state and "ocr_text_b" in st.session_state:
+    st.markdown("#### 📊 ผลลัพธ์ OCR — เลือกคอลัมน์ที่ต้องการเปรียบเทียบ")
+    sel_a, sel_b = st.columns(2)
+
+    with sel_a:
+        st.markdown(f"**เอกสาร A:** `{st.session_state.get('ocr_name_a','')}`")
+        tables_a = parse_markdown_tables(st.session_state["ocr_text_a"])
+        if tables_a:
+            st.dataframe(tables_a[0], use_container_width=True)
+            ocr_cols_a = st.multiselect(
+                "เลือกคอลัมน์ที่ต้องการ (ปล่อยว่าง = เปรียบเทียบทั้งหมด):",
+                options=tables_a[0].columns.tolist(),
+                key="ocr_col_select_a",
             )
-            display_df_b = df_b[selected_columns_b] if selected_columns_b else df_b
-            st.subheader("📊 พรีวิวข้อมูล CSV")
-            st.dataframe(display_df_b, use_container_width=True)
-            selected_sheet_b = ""
         else:
-            selected_sheet_b = ""
-            selected_columns_b = []
+            st.info("ไม่พบตารางใน OCR — จะเปรียบเทียบเนื้อหาทั้งหมด")
+            with st.expander("ดูข้อความ OCR"):
+                st.text(st.session_state["ocr_text_a"])
 
+    with sel_b:
+        st.markdown(f"**เอกสาร B:** `{st.session_state.get('ocr_name_b','')}`")
+        tables_b = parse_markdown_tables(st.session_state["ocr_text_b"])
+        if tables_b:
+            st.dataframe(tables_b[0], use_container_width=True)
+            ocr_cols_b = st.multiselect(
+                "เลือกคอลัมน์ที่ต้องการ (ปล่อยว่าง = เปรียบเทียบทั้งหมด):",
+                options=tables_b[0].columns.tolist(),
+                key="ocr_col_select_b",
+            )
+        else:
+            st.info("ไม่พบตารางใน OCR — จะเปรียบเทียบเนื้อหาทั้งหมด")
+            with st.expander("ดูข้อความ OCR"):
+                st.text(st.session_state["ocr_text_b"])
 
+# ── Phase 2: Compare ──────────────────────────────────────
+st.markdown("#### ขั้นตอนที่ 2 — เปรียบเทียบเอกสาร")
 btn_compare = st.button("🔄 เปรียบเทียบเอกสาร", use_container_width=True, key="btn_compare")
 compare_result_area = st.container()
 
 if btn_compare:
     missing = []
-    if not main_document:
-        missing.append("เอกสาร A")
-    if not secon_document:
-        missing.append("เอกสาร B")
-
+    if not main_document: missing.append("เอกสาร A")
+    if not secon_document: missing.append("เอกสาร B")
     if missing:
         with compare_result_area:
             st.warning(f"กรุณาอัปโหลด: {', '.join(missing)}")
     else:
         with st.status("กำลังเปรียบเทียบเอกสาร...", expanded=True) as status:
             try:
-                st.write("📤 กำลังส่งไฟล์ทั้งสองไปยัง server...")
-                payload = {
-                    "api_key": api_key,
-                    "sheet_a": selected_sheet_a if main_document.name.endswith(".xlsx") else "",
-                    "sheet_b": selected_sheet_b if secon_document.name.endswith(".xlsx") else "",
-                    "columns_a": ",".join(selected_columns_a),
-                    "columns_b": ",".join(selected_columns_b),
-                    "page_range_a": page_range_a,
-                    "page_range_b": page_range_b,
-                }
-                st.write("📄 กำลังอ่านและแปลงเนื้อหาเอกสาร...")
-                r = call_api(
-                    COMPARE_URL,
-                    files={
-                        "main_document":  (main_document.name,  main_document.getvalue()),
-                        "secon_document": (secon_document.name, secon_document.getvalue()),
-                    },
-                    data=payload,
-                )
-                st.write("🤖 AI กำลังวิเคราะห์ความแตกต่าง...")
+                # ถ้ามี OCR ไว้แล้ว ใช้ /compare_text (เร็วกว่า ไม่ต้อง OCR ซ้ำ)
+                if "ocr_text_a" in st.session_state and "ocr_text_b" in st.session_state:
+                    st.write("🤖 AI กำลังวิเคราะห์จากข้อความที่ OCR แล้ว...")
+                    all_cols = list(dict.fromkeys(ocr_cols_a + ocr_cols_b))
+                    r = call_api(COMPARE_TEXT_URL, files={}, data={
+                        "api_key": api_key,
+                        "text_a": st.session_state["ocr_text_a"],
+                        "text_b": st.session_state["ocr_text_b"],
+                        "name_a": st.session_state.get("ocr_name_a", main_document.name),
+                        "name_b": st.session_state.get("ocr_name_b", secon_document.name),
+                        "target_columns": ",".join(all_cols),
+                    })
+                else:
+                    # Fallback: OCR + compare ในครั้งเดียว
+                    st.write("📄 กำลังอ่านและแปลงเนื้อหาเอกสาร...")
+                    r = call_api(COMPARE_URL,
+                        files={
+                            "main_document":  (main_document.name,  main_document.getvalue()),
+                            "secon_document": (secon_document.name, secon_document.getvalue()),
+                        },
+                        data={
+                            "api_key": api_key,
+                            "sheet_a": selected_sheet_a if main_document.name.endswith(".xlsx") else "",
+                            "sheet_b": selected_sheet_b if secon_document.name.endswith(".xlsx") else "",
+                            "columns_a": ",".join(selected_columns_a),
+                            "columns_b": ",".join(selected_columns_b),
+                            "page_range_a": page_range_a,
+                            "page_range_b": page_range_b,
+                        })
                 st.session_state["compare_result"] = r
                 st.session_state["compare_name_a"] = main_document.name
                 st.session_state["compare_name_b"] = secon_document.name
