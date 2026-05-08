@@ -12,7 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 
 import magic
-
+import base64
+from pypdf import PdfReader, PdfWriter
 # =========================================================
 # CONFIG
 # =========================================================
@@ -102,6 +103,44 @@ OCR_PROMPT = """
 - รักษาการเว้นวรรคและวรรคตอนตามต้นฉบับ
 - ห้ามแปลงคำย่อหรือขยายความ
 """
+
+# =========================================================
+#                 PDF Page Range Utilities
+# =========================================================
+
+def parse_page_range(range_str: str) -> list:
+    """แปลง '1-3, 5, 7-9' → [1, 2, 3, 5, 7, 8, 9]"""
+    pages = []
+    for part in range_str.split(","):
+        part = part.strip()
+        if "-" in part:
+            try:
+                a, b = part.split("-", 1)
+                pages.extend(range(int(a.strip()), int(b.strip()) + 1))
+            except ValueError:
+                pass
+        elif part.isdigit():
+            pages.append(int(part))
+    return sorted(set(pages))
+
+def slice_pdf_pages(input_path: str, page_range_str: str) -> str:
+    """ตัด PDF เฉพาะหน้าที่ระบุ → return path ของ PDF ใหม่"""
+    pages = parse_page_range(page_range_str)
+    reader = PdfReader(input_path)
+    total = len(reader.pages)
+    writer = PdfWriter()
+    for p in pages:
+        if 1 <= p <= total:
+            writer.add_page(reader.pages[p - 1])
+    out_path = input_path + "_sliced.pdf"
+    with open(out_path, "wb") as f:
+        writer.write(f)
+    return out_path
+
+def get_pdf_page_count(file_path: str) -> int:
+    """นับจำนวนหน้าใน PDF"""
+    return len(PdfReader(file_path).pages)
+
 
 # ===========================================================================================================
 #                                                  Docx read
@@ -256,7 +295,7 @@ def convert_csv_to_markdown(file_path: str, columns: Optional[list] = None) -> s
 #                                     Extract (shared utility)
 # ================================================================================================
 
-async def extract_text(upload: UploadFile, gemini_client: genai.Client, sheet_name: Optional[str] = None, columns: Optional[list] = None) -> str:
+async def extract_text(upload: UploadFile, gemini_client: genai.Client, sheet_name: Optional[str] = None, columns: Optional[list] = None, page_range: Optional[str] = None) -> str:
     """Extract text จากไฟล์ที่อัปโหลด รองรับ PDF, DOCX, XLSX, CSV"""
     file_bytes = await upload.read()
     suffix = os.path.splitext(upload.filename)[1] or ".tmp"
@@ -271,7 +310,20 @@ async def extract_text(upload: UploadFile, gemini_client: genai.Client, sheet_na
         logger.info(f"[ EXTRACT ] {upload.filename} → {file_type}")
 
         if file_type == "application/pdf":
-            return await pdf_run_ocr_from_path(tmp_path, OCR_PROMPT, gemini_client)
+            sliced_path = None
+            try:
+                if page_range and page_range.strip():
+                    sliced_path = slice_pdf_pages(tmp_path, page_range)
+                    ocr_path = sliced_path
+                    page_label = page_range
+                else:
+                    ocr_path = tmp_path
+                    page_label = "ทั้งหมด"
+                formatted_prompt = OCR_PROMPT.format(page_range=page_label)
+                return await pdf_run_ocr_from_path(ocr_path, formatted_prompt, gemini_client)
+            finally:
+                if sliced_path and os.path.exists(sliced_path):
+                    os.remove(sliced_path)
 
         elif file_type in (
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -421,6 +473,7 @@ async def check(
     api_key: str = Form(""),
     sheet_name: str = Form(""),
     columns: str = Form(""),
+    page_range: str = Form(""),
 ):
     key = get_api_key(api_key)
     gemini_client = genai.Client(api_key=key)
@@ -451,7 +504,7 @@ async def check(
         ) or (file_type in ("text/csv", "text/plain") and suffix == ".csv")
 
         cols = [c.strip() for c in columns.split(",") if c.strip()] if columns else None
-        document_text = await extract_text(quotation, gemini_client, sheet_name=sheet_name or None, columns=cols)
+        document_text = await extract_text(quotation, gemini_client, sheet_name=sheet_name or None, columns=cols, page_range=page_range or None)
 
         if is_table:
             logger.info("[ TABLE CHECK ] ตรวจข้อมูลตาราง...")
@@ -482,6 +535,8 @@ async def compare(
     sheet_b: str = Form(""),
     columns_a: str = Form(""),
     columns_b: str = Form(""),
+    page_range_a: str = Form(""),
+    page_range_b: str = Form(""),
 ):
     key = get_api_key(api_key)
     gemini_client = genai.Client(api_key=key)
@@ -500,8 +555,8 @@ async def compare(
         cols_a = [c.strip() for c in columns_a.split(",") if c.strip()] if columns_a else None
         cols_b = [c.strip() for c in columns_b.split(",") if c.strip()] if columns_b else None
         text_a, text_b = await asyncio.gather(
-            extract_text(main_document, gemini_client, sheet_name=sheet_a or None, columns=cols_a),
-            extract_text(secon_document, gemini_client, sheet_name=sheet_b or None, columns=cols_b),
+            extract_text(main_document, gemini_client, sheet_name=sheet_a or None, columns=cols_a, page_range=page_range_a or None),
+            extract_text(secon_document, gemini_client, sheet_name=sheet_b or None, columns=cols_b, page_range=page_range_b or None),
         )
 
         logger.info("[ COMPARE ] กำลังเปรียบเทียบ...")

@@ -2,6 +2,8 @@ import streamlit as st
 import requests
 import base64
 import pandas as pd
+import io
+from pypdf import PdfReader
 
 st.set_page_config(page_title="Check", layout="wide")
 
@@ -50,6 +52,7 @@ with col_up:
     )
     check_sheet = ""
     check_columns = []
+    page_range_check = ""
     if uploaded_file:
         st.markdown(f"✔️ **อัปโหลดสำเร็จ** — `{uploaded_file.name}`")
         if uploaded_file.name.lower().endswith(".xlsx"):
@@ -61,6 +64,14 @@ with col_up:
                 "เลือก Column ที่ต้องการตรวจสอบ (ปล่อยว่างเพื่อตรวจทั้งหมด):",
                 options=df_check.columns.tolist(),
                 key="check_columns_select",
+            )
+        elif uploaded_file.name.lower().endswith(".pdf"):
+            reader_check = PdfReader(io.BytesIO(uploaded_file.getvalue()))
+            total_pages_check = len(reader_check.pages)
+            st.info(f"📋 ไฟล์นี้มีทั้งหมด **{total_pages_check} หน้า**")
+            page_range_check = st.text_input(
+                f"📌 ระบุหน้าที่ต้องการตรวจ (เช่น 1-3, 5 — ปล่อยว่างเพื่อตรวจทั้ง {total_pages_check} หน้า):",
+                key="check_page_range",
             )
 
 with col_preview:
@@ -86,6 +97,7 @@ if btn_check:
                         "api_key": api_key,
                         "sheet_name": check_sheet,
                         "columns": ",".join(check_columns),
+                        "page_range": page_range_check,
                     },
                 )
                 if is_xlsx:
@@ -145,12 +157,20 @@ st.caption("อัปโหลด 2 ไฟล์เพื่อเปรีย�
 col_a, col_b = st.columns(2)
 selected_sheet_a, selected_columns_a = "", []
 selected_sheet_b, selected_columns_b = "", []
+page_range_a, page_range_b = "", ""
 
 with col_a:
     main_document = st.file_uploader("📄 เอกสาร A", type=["pdf", "docx", "xlsx", "csv"], key="main_document")
     if main_document:
         st.markdown(f"✔️ `{main_document.name}`")
         if main_document.name.lower().endswith(".pdf"):
+            reader_a = PdfReader(io.BytesIO(main_document.getvalue()))
+            total_pages_a = len(reader_a.pages)
+            st.info(f"📋 ไฟล์นี้มีทั้งหมด **{total_pages_a} หน้า**")
+            page_range_a = st.text_input(
+                f"📌 ระบุหน้าที่ต้องการ (เช่น 1-3, 5 — ปล่อยว่างเพื่อส่งทั้ง {total_pages_a} หน้า):",
+                key="compare_page_range_a",
+            )
             render_pdf(main_document)
             
         if main_document.name.lower().endswith(".xlsx"):
@@ -187,6 +207,13 @@ with col_b:
     if secon_document:
         st.markdown(f"✔️ `{secon_document.name}`")
         if secon_document.name.lower().endswith(".pdf"):
+            reader_b = PdfReader(io.BytesIO(secon_document.getvalue()))
+            total_pages_b = len(reader_b.pages)
+            st.info(f"📋 ไฟล์นี้มีทั้งหมด **{total_pages_b} หน้า**")
+            page_range_b = st.text_input(
+                f"📌 ระบุหน้าที่ต้องการ (เช่น 1-3, 5 — ปล่อยว่างเพื่อส่งทั้ง {total_pages_b} หน้า):",
+                key="compare_page_range_b",
+            )
             render_pdf(secon_document)
         
         if secon_document.name.lower().endswith(".xlsx"):
@@ -240,6 +267,8 @@ if btn_compare:
                     "sheet_b": selected_sheet_b if secon_document.name.endswith(".xlsx") else "",
                     "columns_a": ",".join(selected_columns_a),
                     "columns_b": ",".join(selected_columns_b),
+                    "page_range_a": page_range_a,
+                    "page_range_b": page_range_b,
                 }
                 st.write("📄 กำลังอ่านและแปลงเนื้อหาเอกสาร...")
                 r = call_api(
