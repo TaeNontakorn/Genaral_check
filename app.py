@@ -253,11 +253,15 @@ elif menu == "🔄 เปรียบเทียบเอกสาร":
             if main_document.name.lower().endswith(".pdf"):
                 reader_a = PdfReader(io.BytesIO(main_document.getvalue()))
                 total_pages_a = len(reader_a.pages)
-                st.info(f"📋 ไฟล์นี้มีทั้งหมด **{total_pages_a} หน้า**")
-                page_range_a = st.text_input(
-                    f"📌 ระบุหน้าที่ต้องการ (เช่น 1-3, 5):",
-                    key="compare_page_range_a",
-                )
+                
+                if compare_mode == "เลือกคอลัมน์":
+                    st.info(f"📋 ไฟล์นี้มีทั้งหมด **{total_pages_a} หน้า**")
+                    page_range_a = st.text_input(
+                        f"📌 ระบุหน้าที่ต้องการ (เช่น 1-3, 5):",
+                        key="compare_page_range_a",
+                    )
+                else:
+                    page_range_a = "" # ส่งทั้งไฟล์ในโหมดเปรียบเทียบทั้งไฟล์
                 render_pdf(main_document)
             if main_document.name.lower().endswith(".xlsx"):
                 excel_file_a = pd.ExcelFile(main_document)
@@ -278,11 +282,15 @@ elif menu == "🔄 เปรียบเทียบเอกสาร":
             if secon_document.name.lower().endswith(".pdf"):
                 reader_b = PdfReader(io.BytesIO(secon_document.getvalue()))
                 total_pages_b = len(reader_b.pages)
-                st.info(f"📋 ไฟล์นี้มีทั้งหมด **{total_pages_b} หน้า**")
-                page_range_b = st.text_input(
-                    f"📌 ระบุหน้าที่ต้องการ (เช่น 1-3, 5):",
-                    key="compare_page_range_b",
-                )
+
+                if compare_mode == "เลือกคอลัมน์":
+                    st.info(f"📋 ไฟล์นี้มีทั้งหมด **{total_pages_b} หน้า**")
+                    page_range_b = st.text_input(
+                        f"📌 ระบุหน้าที่ต้องการ (เช่น 1-3, 5):",
+                        key="compare_page_range_b",
+                    )
+                else:
+                    page_range_b = "" # ส่งทั้งไฟล์ในโหมดเปรียบเทียบทั้งไฟล์
                 render_pdf(secon_document)
             if secon_document.name.lower().endswith(".xlsx"):
                 excel_file_b = pd.ExcelFile(secon_document)
