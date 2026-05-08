@@ -468,24 +468,81 @@ def compare_documents(text_a: str, text_b: str, name_a: str, name_b: str, gemini
     return response.text
 
 # ================================================================================================
+#                                     OCR Table
+# ================================================================================================
+
+
+
+async def run_ocr_table_analysis(file_path: str, gemini_client: genai.Client) -> str:
+    # เพิ่มรายการหัวข้อที่ต้องการเน้นเพื่อความเป็นระเบียบ
+    target_columns = "['ชื่อ', 'รหัสพนักงาน', 'วันที่', 'จำนวนเงิน', 'เลขประชาชน', 'วันเดือนปี']"
+    
+    prompt = f"""
+        คุณคือผู้เชี่ยวชาญด้านการสกัดข้อมูลและตรวจสอบความถูกต้องของข้อมูล (Data Auditor)
+        
+        ### ภารกิจที่ 1: การสกัดข้อมูลอย่างมีขอบเขต (Targeted Extraction)
+        จากข้อมูลข้อความ/ตารางที่ได้รับ:
+        1. ให้มองหาและสกัดเฉพาะตารางที่มีหัวข้อเกี่ยวข้องกับ: {target_columns} หรือหัวข้อที่ใกล้เคียงทางความหมาย
+        2. **ตัดข้อมูลที่ไม่เกี่ยวข้องออกทั้งหมด**: หากพบตารางอื่นที่มีโครงสร้างไม่ตรงกับกลุ่มหัวข้อข้างต้น หรือเป็นตารางขยะที่เกิดจากการแปลงไฟล์ ให้ข้ามไปทันที
+        3. แปลงข้อมูลที่สกัดได้ให้อยู่ในรูปแบบ Markdown Table ที่สมบูรณ์
+        4. **ความถูกต้องของตัวเลข**: ห้ามเปลี่ยนแปลง แก้ไข หรือสรุปตัวเลขใดๆ ทั้งสิ้น ต้องตรงตามต้นฉบับ 100%
+
+        ### รูปแบบการรายงานผล:
+        - **ตารางที่สกัดได้**: [แสดง Markdown Table ที่สกัดมา]
+        """
+    
+    # อัปโหลดไฟล์ขึ้น Gemini File API
+    uploaded_file = await asyncio.to_thread(gemini_client.files.upload, file=file_path)
+    
+    # ส่งทั้งไฟล์และ Prompt ไปประมวลผล
+    response = await asyncio.to_thread(
+        gemini_client.models.generate_content,
+        model="gemini-2.5-pro",
+        contents=[uploaded_file, prompt],
+        config={"temperature": 0},
+    )
+    return response.text.strip()
+
+# ================================================================================================
 #                                     ENDPOINTS
 # ================================================================================================
 
-@app.post("/ocr")
-async def ocr_single(
+@app.post("/ocr_table")
+async def ocr_table_endpoint(
     file: UploadFile = File(...),
     api_key: str = Form(""),
     page_range: str = Form(""),
 ):
-    """OCR เอกสารเดี่ยว → คืนข้อความล้วๆ เพื่อให้ frontend แสดง preview ก่อนเลือกคอลัมน์"""
+    """OCR เอกสารเฉพาะตารางที่กำหนด → คืนข้อความล้วนๆ เพื่อให้ frontend แสดง preview"""
     key = get_api_key(api_key)
     gemini_client = genai.Client(api_key=key)
+    
+    file_bytes = await file.read()
+    suffix = os.path.splitext(file.filename)[1] or ".tmp"
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(file_bytes)
+        tmp_path = tmp.name
+
+    sliced_path = None
     try:
-        text = await extract_text(file, gemini_client, page_range=page_range or None)
+        process_path = tmp_path
+        # ถ้าเป็น PDF และระบุช่วงหน้า ให้ตัดหน้าก่อน
+        if suffix.lower() == ".pdf" and page_range.strip():
+            sliced_path = slice_pdf_pages(tmp_path, page_range)
+            process_path = sliced_path
+
+        text = await run_ocr_table_analysis(process_path, gemini_client)
         return {"ocr_text": text}
     except Exception as e:
         logger.error(f"OCR ERROR: {e}")
         return {"error": str(e)}
+    finally:
+        # ลบไฟล์ชั่วคราว
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        if sliced_path and os.path.exists(sliced_path):
+            os.remove(sliced_path)
 
 
 @app.post("/compare_text")

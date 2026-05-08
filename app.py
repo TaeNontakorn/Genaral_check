@@ -9,7 +9,7 @@ st.set_page_config(page_title="Check", layout="wide")
 
 API_URL          = "https://genaral-check-1.onrender.com/check"
 COMPARE_URL      = "https://genaral-check-1.onrender.com/compare"
-OCR_URL          = "https://genaral-check-1.onrender.com/ocr"
+OCR_URL          = "https://genaral-check-1.onrender.com/ocr_table"
 EXTRACT_URL      = "https://genaral-check-1.onrender.com/extract"
 COMPARE_TEXT_URL = "https://genaral-check-1.onrender.com/compare_text"
 st.markdown("<style>iframe { border: none; }</style>", unsafe_allow_html=True)
