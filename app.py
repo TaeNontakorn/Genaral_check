@@ -275,21 +275,39 @@ elif menu == "🔄 เปรียบเทียบเอกสาร":
     if "comp_text_a" in st.session_state and comp_mode == "เลือกคอลัมน์":
         st.markdown("### 📊 เลือกคอลัมน์เพื่อเปรียบเทียบ")
         c1, c2 = st.columns(2)
+        
+        sel_a = []
+        sel_b = []
+        
         with c1:
             st.caption(f"ตารางใน {st.session_state['comp_name_a']}")
             t_a = parse_markdown_tables(st.session_state["comp_text_a"])
             if t_a: 
-                st.dataframe(t_a[0], use_container_width=True)
-                sel_a = st.multiselect("คอลัมน์ (A):", t_a[0].columns.tolist(), key="sel_a")
-            else: st.warning("ไม่พบตาราง")
+                all_cols_a = []
+                for idx, df_t in enumerate(t_a):
+                    with st.expander(f"ตารางที่ {idx+1} ({len(df_t)} แถว)", expanded=(idx==0)):
+                        st.dataframe(df_t, use_container_width=True)
+                    all_cols_a.extend(df_t.columns.tolist())
+                all_cols_a = list(dict.fromkeys(all_cols_a))
+                sel_a = st.multiselect("คอลัมน์ (A):", all_cols_a, key="sel_a")
+            else: 
+                st.warning("ไม่พบตาราง")
+                
         with c2:
             st.caption(f"ตารางใน {st.session_state['comp_name_b']}")
             t_b = parse_markdown_tables(st.session_state["comp_text_b"])
             if t_b: 
-                st.dataframe(t_b[0], use_container_width=True)
-                sel_b = st.multiselect("คอลัมน์ (B):", t_b[0].columns.tolist(), key="sel_b")
-            else: st.warning("ไม่พบตาราง")
-        ocr_comp_cols = list(dict.fromkeys((sel_a if 'sel_a' in locals() else []) + (sel_b if 'sel_b' in locals() else [])))
+                all_cols_b = []
+                for idx, df_t in enumerate(t_b):
+                    with st.expander(f"ตารางที่ {idx+1} ({len(df_t)} แถว)", expanded=(idx==0)):
+                        st.dataframe(df_t, use_container_width=True)
+                    all_cols_b.extend(df_t.columns.tolist())
+                all_cols_b = list(dict.fromkeys(all_cols_b))
+                sel_b = st.multiselect("คอลัมน์ (B):", all_cols_b, key="sel_b")
+            else: 
+                st.warning("ไม่พบตาราง")
+                
+        ocr_comp_cols = list(dict.fromkeys(sel_a + sel_b))
 
     # Phase 2: Final Compare
     if doc_a and doc_b:
