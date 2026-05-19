@@ -175,7 +175,6 @@ def smart_docx_extract(file_path: str) -> str:
         parts = []
         for child in p_el.iter():
             tag = child.tag
-            # ข้าม subtree ของ drawing (textbox ลอยอยู่ใน drawing)
             if tag == W_DRAWING:
                 continue
             if tag == W_T and child.text:
@@ -204,24 +203,34 @@ def smart_docx_extract(file_path: str) -> str:
         return "\n".join(lines)
 
     def read_table(table):
-        rows_text = []
+        """แปลง Docx Table เป็น Markdown Table โดยใช้ Pandas เพื่อความสวยงาม"""
+        data = []
         for row in table.rows:
-            cells = [cell.text.strip() for cell in row.cells]
-            deduped = []
-            for c in cells:
-                if not deduped or c != deduped[-1]:
-                    deduped.append(c)
-            rows_text.append(" | ".join(deduped))
-        return rows_text
+            cells = [cell.text.strip().replace("\n", " ") for cell in row.cells]
+            data.append(cells)
+        
+        if not data:
+            return []
+        
+        try:
+            # ใช้ pandas ช่วยจัดการ Markdown Table
+            df = pd.DataFrame(data)
+            # ใช้แถวแรกเป็น Header ถ้ามีข้อมูล
+            if not df.empty:
+                headers = df.iloc[0]
+                df = df[1:]
+                df.columns = headers
+                return [df.to_markdown(index=False)]
+        except Exception:
+            # Fallback ถ้าจัดรูปแบบไม่ได้
+            return [" | ".join(row) for row in data]
+        return []
 
     blocks = []
 
     for child in doc.element.body:
         if child.tag == W_P:
-            # อ่าน paragraph text (ไม่รวม drawing)
             para_text = read_paragraph(child)
-
-            # อ่าน textbox ที่ลอยอยู่ใน paragraph นี้ (wp:anchor)
             txbx_parts = []
             for drawing in child.iter(W_DRAWING):
                 for anchor in drawing.iter(W_ANCHOR):
@@ -240,7 +249,7 @@ def smart_docx_extract(file_path: str) -> str:
         elif child.tag == W_TBL:
             blocks.extend(read_table(DocxTable(child, doc)))
 
-    # เก็บ textbox ที่อาจหลุดจาก body loop (เช่น nested ลึก)
+    # เก็บ textbox ที่อาจหลุดจาก body loop
     for txbx in doc.element.body.iter(W_TXBX):
         lines = [read_paragraph(p) for p in txbx.iter(W_P)]
         text = "\n".join(l.strip() for l in lines if l.strip())
@@ -526,13 +535,23 @@ async def ocr_table_endpoint(
 
     sliced_path = None
     try:
-        process_path = tmp_path
-        # ถ้าเป็น PDF และระบุช่วงหน้า ให้ตัดหน้าก่อน
-        if suffix.lower() == ".pdf" and page_range.strip():
-            sliced_path = slice_pdf_pages(tmp_path, page_range)
-            process_path = sliced_path
+        detector = magic.Magic(mime=True)
+        file_type = detector.from_file(tmp_path)
 
-        text = await run_ocr_table_analysis(process_path, gemini_client)
+        if file_type == "application/pdf":
+            process_path = tmp_path
+            # ถ้าเป็น PDF และระบุช่วงหน้า ให้ตัดหน้าก่อน
+            if page_range.strip():
+                sliced_path = slice_pdf_pages(tmp_path, page_range)
+                process_path = sliced_path
+
+            text = await run_ocr_table_analysis(process_path, gemini_client)
+        else:
+            # สำหรับไฟล์ประเภทอื่น (XLSX, CSV, DOCX) ไม่ต้องทำ OCR ให้สกัดข้อความโดยตรง
+            import io
+            file.file = io.BytesIO(file_bytes)
+            text = await extract_text(file, gemini_client, page_range=page_range or None)
+
         return {"ocr_text": text}
     except Exception as e:
         logger.error(f"OCR ERROR: {e}")
